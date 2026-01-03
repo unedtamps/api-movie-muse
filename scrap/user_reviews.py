@@ -10,7 +10,7 @@ import aiohttp
 from selectolax.parser import HTMLParser
 
 DATA_DIR = "data"
-DB_PATH = os.path.join(DATA_DIR, "user_reviews.db")
+DB_PATH = os.path.join(DATA_DIR, "database2.db")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -52,8 +52,8 @@ def sample_pages(max_page: int) -> list[int]:
     pages = set()
     zones = [
         (1, min(5, max_page), 2),
-        (6, min(30, max_page), 3),
-        (31, max_page, 1),
+        (6, min(30, max_page), 5),
+        (31, max_page, 2),
     ]
     for start, end, k in zones:
         if start <= end:
@@ -145,16 +145,21 @@ async def db_writer(queue: asyncio.Queue):
 
 
 async def scrape_user(session, queue, user_id: str, sem: asyncio.Semaphore):
-    pages = sample_pages(100)
+    page = 1
 
-    for p in pages:
-        diary_url = f"https://letterboxd.com{user_id}diary/films/page/{p}/"
+    while True:
+        diary_url = f"https://letterboxd.com{user_id}diary/films/page/{page}/"
 
         async with sem:
             html = await fetch(session, diary_url)
 
         if not html:
             continue
+
+        tree = HTMLParser(html)
+        if tree.css_first(".diary-entry-row") is None:
+            print("No more entries.")
+            break
 
         for entry in parse_diary(html):
             film_id = clean_film_url(entry["film_href"])
@@ -179,6 +184,7 @@ async def scrape_user(session, queue, user_id: str, sem: asyncio.Semaphore):
                     "review": review_text,
                 }
             )
+        page += 1
 
 
 def load_user_ids(csv_path: str) -> list[str]:
@@ -190,7 +196,7 @@ async def run():
     os.makedirs(DATA_DIR, exist_ok=True)
     init_schema()
 
-    user_ids = load_user_ids(os.path.join(DATA_DIR, "users.csv"))
+    user_ids = load_user_ids(os.path.join(DATA_DIR, "users_clone.csv"))
 
     sem = asyncio.Semaphore(20)  # HTTP concurrency
     db_queue = asyncio.Queue(maxsize=1000)

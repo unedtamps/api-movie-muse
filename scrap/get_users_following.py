@@ -7,7 +7,9 @@ from bs4 import BeautifulSoup
 
 DATA_DIR = "data"
 CSV_PATH = os.path.join(DATA_DIR, "users.csv")
-POPULAR_PAGES = 256
+CSV_FOLLOWERS_PATH = os.path.join(DATA_DIR, "user_followers.csv")
+
+MAX_PAGE = 256
 
 BASE_URL = "https://letterboxd.com"
 
@@ -25,8 +27,8 @@ def load_existing(csv_path: str) -> set[str]:
     return seen
 
 
-async def fetch_page(client: httpx.AsyncClient, path: str, page: int) -> str | None:
-    url = f"{BASE_URL}/members/popular{path}page/{page}/"
+async def fetch_page(client: httpx.AsyncClient, user: str, page: int) -> str | None:
+    url = f"{BASE_URL}{user}following/page/{page}/"
     try:
         r = await client.get(url, timeout=30)
         r.raise_for_status()
@@ -47,12 +49,13 @@ def extract_users(html: str) -> list[str]:
 
 async def run():
     os.makedirs(DATA_DIR, exist_ok=True)
-    paths = ["/this/week/", "/this/month/", "/this/year/", "/"]
 
     seen = load_existing(CSV_PATH)
+    seen = seen.union(load_existing(CSV_FOLLOWERS_PATH))
+    user_load = load_existing(CSV_PATH)
     print(f"Loaded {len(seen)} existing rows")
 
-    file_exists = os.path.exists(CSV_PATH)
+    file_exists = os.path.exists(CSV_FOLLOWERS_PATH)
 
     async with httpx.AsyncClient(
         headers={
@@ -62,30 +65,31 @@ async def run():
         follow_redirects=True,
     ) as client:
 
-        with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
-
+        with open(CSV_FOLLOWERS_PATH, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=["user_id"])
             if not file_exists:
                 writer.writeheader()
-
-            for path in paths:
-                for page in range(1, POPULAR_PAGES + 1):
-                    html = await fetch_page(client, path, page)
+            for user in user_load:
+                page = 1
+                while page <= MAX_PAGE:
+                    html = await fetch_page(client, user, page)
                     if not html:
                         continue
-
                     user_ids = extract_users(html)
+                    if not user_ids:
+                        print(
+                            f"No more users found for {user} at page {page}, stopping."
+                        )
+                        break
 
                     for user_id in user_ids:
                         if user_id in seen:
                             continue
-                        print(f"Write {user_id}")
                         writer.writerow({"user_id": user_id})
                         seen.add(user_id)
-
-                    print(f"Completed popular {path} page {page}")
+                    print(f"Completed following user {user} page {page}")
+                    page += 1
 
 
 if __name__ == "__main__":
     asyncio.run(run())
-

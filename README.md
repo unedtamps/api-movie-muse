@@ -47,7 +47,11 @@ python3 api/main.py
 | Endpoint | Description | Parameters |
 | --- | --- | --- |
 | `GET /film/<id>` | Retrieve detailed metadata for a specific film. | `id`: Letterboxd film slug |
-| `GET /diary/<user_id>` | Get a paginated list of a user's diary entries. | `page`: Page number (optional) |
+| `GET /diary/<user_id>?page=` | Get a paginated list of a user's diary entries. | `page`: Page number (optional) |
+| `GET /recommend/<user_id>?k=` | Get a paginated list movie recommendation for users | `k`: Page number (optional) |
+| `GET /get_list` | Get List of movie from url | None |
+
+
 
 **Example Request:**
 `GET /diary/official?page=2`
