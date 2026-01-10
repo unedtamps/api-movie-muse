@@ -2,7 +2,7 @@
 
 * **User Discovery:** Scrape lists of currently popular Letterboxd curators.
 * **Data Extraction:** Pull comprehensive movie diaries and written reviews from specific profiles.
-* **REST API:** Access scraped film details and user activity through structured endpoints.
+* **REST API:** Access scraped film details and user activity through structured endpoints and get film recommendations based on user preferences and seed films.
 
 
 ## Scraping 
@@ -37,26 +37,14 @@ python3 scrap/get_film_details.py
 
 ## API Usage
 
-Start the local server to serve your scraped data:
+Start the local server to serve  scraped data and provide recommendations:
 
 ```bash
 python3 api/main.py
 ```
 
 ### Endpoints
-| Endpoint | Description | Parameters |
-| --- | --- | --- |
-| `GET /film/<id>` | Retrieve detailed metadata for a specific film. | `id`: Letterboxd film slug |
-| `GET /diary/<user_id>?page=` | Get a paginated list of a user's diary entries. | `page`: Page number (optional) |
-| `GET /recommend/<user_id>?k=` | Get a paginated list movie recommendation for users | `k`: Page number (optional) |
-| `GET /get_list` | Get List of movie from url | None |
-
-
-
-**Example Request:**
-`GET /diary/official?page=2`
-
----
+Access the following endpoints and documentation via Swagger UI at `http://localhost:5000/api/docs`.
 
 ##  Installation
 
