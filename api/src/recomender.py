@@ -4,6 +4,7 @@ import pickle
 import aiohttp
 import numpy as np
 from flask_caching import Cache
+from scipy.sparse import coo_matrix, csr_matrix
 from src.users import get_user_diary_page
 
 cache = Cache(
@@ -13,6 +14,16 @@ cache = Cache(
         "CACHE_REDIS_PORT": 6379,
         "CACHE_REDIS_DB": 0,
         "CACHE_DEFAULT_TIMEOUT": 3600,  # 1 hour
+    }
+)
+
+cache_slow = Cache(
+    config={
+        "CACHE_TYPE": "RedisCache",
+        "CACHE_REDIS_HOST": "localhost",
+        "CACHE_REDIS_PORT": 6380,
+        "CACHE_REDIS_DB": 1,
+        "CACHE_DEFAULT_TIMEOUT": 86400,  # 24 hours
     }
 )
 
@@ -29,32 +40,68 @@ user_map = obj["user_map"]
 id_to_film = {idx: film_id for film_id, idx in item_map.items()}
 
 
-def infer_user_vector(item_ids, ratings, item_factors):
-    item_ids = np.asarray(item_ids, dtype=int)
-    ratings = np.asarray(ratings, dtype=float)
-    if len(item_ids) == 0:
-        raise ValueError("No known items for user")
-    if len(ratings) > 1:
-        w = ratings - ratings.mean()
-    else:
-        w = np.ones_like(ratings)
-    user_vec = (item_factors[item_ids] * w[:, None]).sum(axis=0)
-    return user_vec
-
-
 def process_film_id(film_id):
     film_id = film_id.split("/")
     film_id = "/".join(film_id[1:3])
     return f"/{film_id}/"
 
 
+def get_live_recommendations(film_ids_raw, ratings, likes, is_seed, N=10):
+    valid_indices = []
+    valid_mask = []
+
+    for i, fid in enumerate(film_ids_raw):
+        if fid in item_map:
+            valid_indices.append(item_map[fid])
+            valid_mask.append(i)
+
+    if not valid_indices:
+        return []
+
+    ratings = ratings[valid_mask]
+    likes = likes[valid_mask]
+
+    positive_ratings = ratings[ratings > 0]
+    current_user_mean = np.mean(positive_ratings) if len(positive_ratings) > 0 else 3.0
+    current_user_mean = current_user_mean if not is_seed else 2.5
+
+    unrated_proxy = current_user_mean * 0.9
+    rating_proxies = np.where(ratings > 0, ratings, unrated_proxy)
+
+    ratio_scores = rating_proxies / (current_user_mean + 1e-9)
+
+    alpha = 40
+    raw_scores = 1 + ratio_scores + (likes * 1.5)
+    confidences = 1 + alpha * raw_scores
+
+    row_indices = np.zeros(len(valid_indices))
+    col_indices = np.array(valid_indices)
+
+    user_interactions = csr_matrix(
+        (confidences, (row_indices, col_indices)),
+        shape=(1, model.item_factors.shape[0]),
+    )
+
+    ids, _ = model.recommend(
+        userid=0,
+        user_items=user_interactions,
+        N=N,
+        recalculate_user=True,
+        filter_already_liked_items=True,
+    )
+
+    recommended_films = [id_to_film[i] for i in ids]
+    return recommended_films
+
+
 BATCH = 10
 
 
-async def compute_ranked(user_id: str, k: int = 10) -> list[str]:
+async def compute_ranked_by_user_id(user_id: str, k: int = 1000) -> list[str]:
     seen = set()
-    item_ids = []
-    ratings = []
+    raw_film_ids = []
+    raw_ratings = []
+    raw_likes = []
 
     page = 1
     async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -73,38 +120,45 @@ async def compute_ranked(user_id: str, k: int = 10) -> list[str]:
 
                 for r in data:
                     fid = r.get("film_id")
+                    if not fid:
+                        continue
                     fid = process_film_id(fid)
+
+                    if fid in seen:
+                        continue
+
+                    seen.add(fid)
+
                     rating = r.get("rating")
+                    liked = r.get("liked", False)
 
-                    if fid not in item_map:
-                        continue
+                    r_val = (
+                        float(rating) if (rating is not None and rating > 0) else 0.0
+                    )
+                    l_val = 1.0 if liked else 0.0
 
-                    i = item_map[fid]
-                    seen.add(i)
-
-                    if rating is None or rating <= 0:
-                        continue
-
-                    item_ids.append(i)
-                    ratings.append(float(rating))
+                    raw_film_ids.append(fid)
+                    raw_ratings.append(r_val)
+                    raw_likes.append(l_val)
 
             page += BATCH
 
-    if len(item_ids) < 2:
+    if len(raw_film_ids) < 2:
         return []
 
-    item_ids = np.asarray(item_ids, dtype=np.int32)
-    ratings = np.asarray(ratings, dtype=np.float32)
+    return get_live_recommendations(
+        np.array(raw_film_ids), np.array(raw_ratings), np.array(raw_likes), False, N=k
+    )
 
-    u_vec = infer_user_vector(item_ids, ratings, model.item_factors)
 
-    scores = model.item_factors @ u_vec
-    scores[list(seen)] = -np.inf
+async def compute_ranked_by_seeds(seed_film_ids: list[str], k: int = 1000) -> list[str]:
+    if not seed_film_ids:
+        return []
 
-    topk = np.argpartition(scores, -k)[-k:]
-    topk = topk[np.argsort(scores[topk])[::-1]]
+    ratings = np.array([5.0] * len(seed_film_ids))
+    likes = np.array([1.0] * len(seed_film_ids))
 
-    return [id_to_film[i] for i in topk]
+    return get_live_recommendations(np.array(seed_film_ids), ratings, likes, True, N=k)
 
 
 PER_PAGE = 10
@@ -123,6 +177,18 @@ async def get_ranked_cached(user_id: str, page: int):
     if ranked is not None:
         return paginate_ranked(ranked, page)
 
-    ranked = await compute_ranked(user_id, 1000)
+    ranked = await compute_ranked_by_user_id(user_id, 1000)
+    cache.set(key, ranked)
+    return paginate_ranked(ranked, page)
+
+
+async def get_ranked_by_seeds_cached(seed_film_ids: list[str], page: int):
+    key = f"ranked_seeds:{'-'.join(seed_film_ids)}"
+
+    ranked = cache.get(key)
+    if ranked is not None:
+        return paginate_ranked(ranked, page)
+
+    ranked = await compute_ranked_by_seeds(seed_film_ids, 1000)
     cache.set(key, ranked)
     return paginate_ranked(ranked, page)

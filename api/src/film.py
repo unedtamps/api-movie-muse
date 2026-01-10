@@ -1,39 +1,30 @@
 import asyncio
+import json
+import re
+import time
 
-from playwright.async_api import async_playwright
+import aiohttp
+from bs4 import BeautifulSoup
 
 
-async def safe_get_text(locator):
+async def fetch_html(session, url):
     try:
-        if await locator.count() > 0:
-            return await locator.text_content()
-    except:
-        pass
-    return None
-
-
-async def get_detail_val(page, label):
-    try:
-        xpath = f"//div[@id='tab-details']//h3[contains(., '{label}')]/following-sibling::div[1]"
-        target = page.locator(xpath)
-
-        if await target.count() == 0:
+        async with session.get(url, timeout=60) as response:
+            if response.status == 200:
+                return await response.text()
             return None
-
-        links = await target.locator("a").all()
-        if links:
-            texts = await asyncio.gather(*[l.text_content() for l in links])
-            return ", ".join(texts)
-
-        return await target.text_content()
-    except:
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
         return None
 
 
-async def scrape(context, film_id):
-    page = await context.new_page()
-    url = f"https://letterboxd.com{film_id}/"
+def extract_text(element):
+    """Helper untuk mengambil teks bersih jika elemen ditemukan."""
+    return element.get_text(strip=True) if element else None
 
+
+def parse_film_data(html, film_id):
+    soup = BeautifulSoup(html, "html.parser")
     data = {
         "id": film_id,
         "name": None,
@@ -45,96 +36,77 @@ async def scrape(context, film_id):
         "casts": None,
         "genres": None,
         "themes": None,
-        "studio": None,
-        "countries": None,
-        "language": None,
-        "views": None,
-        "lists": None,
-        "likes": None,
-        "fans": None,
-        "ratings": None,
         "duration": None,
     }
-    url = f"https://letterboxd.com{film_id}"
+
+    details_head = soup.select_one(".details")
+    if details_head:
+        data["name"] = extract_text(details_head.select_one("h1"))
+
+    data["year"] = extract_text(soup.select_one(".releasedate"))
+    data["director"] = extract_text(soup.select_one(".contributor"))
+    data["tagline"] = extract_text(soup.select_one(".tagline"))
+    data["synopsis"] = extract_text(soup.select_one(".truncate"))
+
+    cast_links = soup.select(".cast-list .text-slug")
+    if cast_links:
+        casts = [c.get_text(strip=True) for c in cast_links]
+        data["casts"] = ", ".join(casts)
+
+    genre_lists = soup.select("#tab-genres .text-sluglist")
+
+    if len(genre_lists) > 0:
+        g_links = genre_lists[0].select("a")
+        data["genres"] = ", ".join([l.get_text(strip=True) for l in g_links])
+
+    if len(genre_lists) > 1:
+        t_links = genre_lists[1].select("a")
+        data["themes"] = ", ".join([l.get_text(strip=True) for l in t_links])
+
+    if not data["poster"]:
+        try:
+            script_tag = soup.find("script", type="application/ld+json")
+            if script_tag:
+                json_content = script_tag.string.replace("/* <![CDATA[ */", "").replace(
+                    "/* ]]> */", ""
+                )
+                ld_data = json.loads(json_content)
+                if "image" in ld_data:
+                    data["poster"] = ld_data["image"]
+        except Exception:
+            pass
 
     try:
-        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-    except:
-        return None
-
-    head = page.locator(".details").first
-    data["name"] = await safe_get_text(head.locator("h1").first)
-    data["year"] = await safe_get_text(page.locator(".releasedate").first)
-    data["director"] = await safe_get_text(page.locator(".contributor").first)
-    data["tagline"] = await safe_get_text(page.locator(".tagline").first)
-    data["synopsis"] = await safe_get_text(page.locator(".truncate").first)
-
-    cast_locators = await page.locator(".cast-list .text-slug").all()
-    casts = [await c.text_content() for c in cast_locators]
-    data["casts"] = ", ".join(casts) if casts else None
-
-    genre_elements = await page.locator("#tab-genres .text-sluglist").all()
-    if len(genre_elements) > 0:
-        g_links = await genre_elements[0].locator("a").all()
-        data["genres"] = ", ".join([await l.text_content() for l in g_links])
-    if len(genre_elements) > 1:
-        t_links = await genre_elements[1].locator("a").all()
-        data["themes"] = ", ".join([await l.text_content() for l in t_links])
-
-    try:
-        await page.wait_for_selector(".production-statistic-list > div", timeout=5000)
-        stats = await page.locator(".production-statistic-list > div").all()
-        if len(stats) >= 3:
-            data["views"] = (await stats[0].text_content()).strip().split()[0]
-            data["lists"] = (await stats[1].text_content()).strip().split()[0]
-            data["likes"] = (await stats[2].text_content()).strip().split()[0]
-    except Exception:
-        pass
-
-    data["fans"] = await safe_get_text(
-        page.locator(".ratings-histogram-chart > a").first
-    )
-    data["ratings"] = await safe_get_text(page.locator(".average-rating > a").first)
-
-    try:
-        slug = film_id.split("/")
-        if len(slug) > 2:
-            poster_img = page.locator(
-                f'.poster-list [data-item-slug="{slug[2]}"] .film-poster'
-            ).first
-            img = poster_img.locator("img")
-            data["poster"] = await img.get_attribute("src")
-    except Exception:
-        pass
-
-    try:
-        dur_el = page.locator(".text-footer").first
-        if await dur_el.count() > 0:
-            dur_text = await dur_el.text_content()
-            import re
-
+        dur_el = soup.select_one(".text-footer")
+        if dur_el:
+            dur_text = dur_el.get_text(strip=True)
             match = re.search(r"(\d+)\s+mins", dur_text)
             if match:
                 data["duration"] = match.group(1)
             else:
-                parts = dur_text.strip().split()
-                for p in parts:
+                for p in dur_text.split():
                     if p.isdigit():
                         data["duration"] = p
                         break
     except Exception:
         pass
 
-    data["studio"] = await get_detail_val(page, "Studios")
-    data["countries"] = await get_detail_val(page, "Country")
-    data["language"] = await get_detail_val(page, "Language")
-
-    await page.close()
     return data
 
 
-async def get_film_by_id(fid):
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context()
-        return await scrape(context, fid)
+async def get_film_by_id(film_id):
+    url = f"https://letterboxd.com{film_id}"
+    start_time = time.time()
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        html = await fetch_html(session, url)
+
+        if not html:
+            return None
+
+        data = parse_film_data(html, film_id)
+        return data

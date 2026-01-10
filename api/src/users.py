@@ -34,34 +34,27 @@ async def fetch(session: aiohttp.ClientSession, url: str) -> Optional[str]:
 
 def parse_diary(html: str):
     tree = HTMLParser(html)
-    rows = tree.css(".diary-entry-row")
+    rows = tree.css(".griditem")
 
     for row in rows:
-        film_a = row.css_first(".name a")
-        rating_el = row.css_first(".rating")
+        component = row.css_first(".react-component")
+        viewing_data = row.css_first(".poster-viewingdata")
+        attrs = component.attributes
+        film_a = attrs.get("data-item-link")
+        rating_el = viewing_data.css_first(".rating")
+        like_icon = bool(viewing_data.css_first(".icon-liked"))
 
         yield {
-            "film_href": film_a.attributes.get("href") if film_a else None,
+            "film_href": film_a,
             "rating": rating_el.text(strip=True) if rating_el else None,
-            "liked": bool(row.css_first(".icon-liked")),
-            "reviewed": bool(row.css_first(".icon-review")),
+            "liked": like_icon,
         }
-
-
-def parse_review(html: str) -> Optional[str]:
-    tree = HTMLParser(html)
-    body = tree.css_first(".js-review-body")
-    if not body:
-        return None
-
-    text = body.text()
-    return re.sub(r"^\s+", "", text)
 
 
 async def scrape_user(session, user_id: str, page):
     datas = []
 
-    diary_url = f"https://letterboxd.com{user_id}diary/films/page/{page}/"
+    diary_url = f"https://letterboxd.com{user_id}films/page/{page}/"
 
     html = await fetch(session, diary_url)
 
@@ -73,20 +66,11 @@ async def scrape_user(session, user_id: str, page):
         if not film_id:
             continue
 
-        review_text = None
-
-        if entry["reviewed"]:
-            review_url = f"https://letterboxd.com{entry['film_href']}"
-            review_html = await fetch(session, review_url)
-            if review_html:
-                review_text = parse_review(review_html)
-
         data = {
             "user_id": user_id,
             "film_id": film_id,
             "rating": convert_stars_to_number(entry["rating"]),
             "liked": entry["liked"],
-            "review": review_text,
         }
         datas.append(data)
     return datas
