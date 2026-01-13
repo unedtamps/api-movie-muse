@@ -33,6 +33,12 @@ Enriches the data by fetching specific metadata (genres, cast, etc.) for movies 
 python3 scrap/get_film_details.py
 ```
 
+## 4. Fetch All Users Following (Optional)
+Crawls the followers of all users in the database to expand the user base.
+
+```bash
+python3 scrap/get_all_following.py
+```
 
 
 ## API Usage
