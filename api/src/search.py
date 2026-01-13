@@ -22,7 +22,7 @@ async def run(context, query):
         poster_film = None
 
         if poster:
-            poster_film = await poster.get_attribute("src")
+            poster_film = await poster.get_attribute("srcset")
 
         results.append(
             {

@@ -37,6 +37,7 @@ def parse_film_data(html, film_id):
         "genres": None,
         "themes": None,
         "duration": None,
+        "rating": None,
     }
 
     details_head = soup.select_one(".details")
@@ -73,6 +74,11 @@ def parse_film_data(html, film_id):
                 ld_data = json.loads(json_content)
                 if "image" in ld_data:
                     data["poster"] = ld_data["image"]
+                if (
+                    "aggregateRating" in ld_data
+                    and "ratingValue" in ld_data["aggregateRating"]
+                ):
+                    data["rating"] = str(ld_data["aggregateRating"]["ratingValue"])
         except Exception:
             pass
 

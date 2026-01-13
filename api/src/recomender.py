@@ -5,6 +5,7 @@ import aiohttp
 import numpy as np
 from flask_caching import Cache
 from scipy.sparse import coo_matrix, csr_matrix
+
 from src.users import get_user_diary_page
 
 cache = Cache(
@@ -161,7 +162,7 @@ async def compute_ranked_by_seeds(seed_film_ids: list[str], k: int = 1000) -> li
     return get_live_recommendations(np.array(seed_film_ids), ratings, likes, True, N=k)
 
 
-PER_PAGE = 10
+PER_PAGE = 1000
 
 
 def paginate_ranked(ranked, page: int):
