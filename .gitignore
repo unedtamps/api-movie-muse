@@ -2,3 +2,4 @@ archive
 .venv
 .venv-flask
 .env
+api/model/model.pkl
