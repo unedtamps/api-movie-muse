@@ -1,0 +1,9 @@
+services:
+  api-muse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./model/model.pkl:/app/model/model.pkl
+    ports:
+      - 5000:5000

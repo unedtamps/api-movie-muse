@@ -1,10 +1,10 @@
 import asyncio
+from logging import debug
 
 import aiohttp
 from flasgger import Swagger
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-
 from src.film import get_film_by_id
 from src.get_list import get_list as fetch_list
 from src.recomender import (
@@ -207,4 +207,4 @@ async def search_films():
 
 
 if __name__ == "__main__":
-    app.run()
+    app.run(debug=False, host="0.0.0.0", port=5000)
